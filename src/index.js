@@ -1,7 +1,24 @@
 export default {
   async fetch(request, env) {
     if (request.method === "GET") {
-      return new Response("CDP Slip Worker aktif");
+
+  const r = await fetch(
+    "https://api.github.com/repos/Yolo9203/Repository-name-BRI-SLIP-GROUPER/contents/output",
+    {
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json"
+      }
+    }
+  );
+
+  const data = await r.json();
+
+  return new Response(JSON.stringify(data, null, 2), {
+    headers: {
+      "Content-Type": "application/json"
+    }
+  });
     }
 
     const update = await request.json();
