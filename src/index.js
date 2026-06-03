@@ -1,16 +1,20 @@
 export default {
   async fetch(request, env) {
     if (request.method === "GET") {
-      return new Response("CDP Slip Worker aktif");
+      const tokenStatus = env.BOT_TOKEN ? "BOT_TOKEN TERBACA" : "BOT_TOKEN TIDAK TERBACA";
+      return new Response("CDP Slip Worker aktif\n" + tokenStatus);
     }
 
     const update = await request.json();
-
     const chatId = update.message?.chat?.id;
     const text = update.message?.text || "";
 
     if (!chatId) {
       return new Response("OK");
+    }
+
+    if (!env.BOT_TOKEN) {
+      return new Response("BOT_TOKEN tidak ada");
     }
 
     await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
