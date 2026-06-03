@@ -23,7 +23,7 @@ export default {
     const cdp4 = cdp.padStart(4, "0");
 
     const fileUrl =
-  `https://github.com/Yolo9203/Repository-name-BRI-SLIP-GROUPER/raw/main/output/2026-06-02/CDP%20${cdp4}.pdf`;
+      `https://github.com/Yolo9203/Repository-name-BRI-SLIP-GROUPER/raw/main/output/2026-06-02/CDP%20${cdp4}.pdf`;
 
     const check = await fetch(fileUrl);
 
