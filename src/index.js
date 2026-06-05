@@ -20,17 +20,6 @@ export default {
     }
 
     const cdp4 = cdp.padStart(4, "0");
-    // DEBUG SEMENTARA - hapus setelah masalah ketemu
-if (text.startsWith("debug")) {
-  const latestFolder = await getLatestOutputFolder(env);
-  const fileName = `CDP ${cdp4}.pdf`;
-  const fileUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encodeURIComponent(fileName)}`;
-  const fileRes = await githubFetch(env, fileUrl);
-  await sendMessage(env, chatId, 
-    `Folder: ${latestFolder}\nFile: ${fileName}\nStatus: ${fileRes.status}\nURL: ${fileUrl}`
-  );
-  return new Response("OK");
-}
     const cdpKey = `CDP ${cdp4}`;
 
     // Jalankan 3 pengecekan paralel
@@ -140,18 +129,21 @@ async function checkExcel(env, cdp4) {
 }
 
 // ─── Slip PDF: cek di folder output GitHub ─────────────────────────────────
-async function getLatestOutputFolder(env) {
-  const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output`;
-  const res = await githubFetch(env, url);
-  if (!res.ok) return null;
-  const items = await res.json();
-  const folders = items
-    .filter(item => item.type === "dir" && /^\d{4}-\d{2}-\d{2}$/.test(item.name))
-    .map(item => item.name)
-    .sort()
-    .reverse();
-  return folders[0] || null;
-}
+async function getSlipFile(env, cdp4) {
+  try {
+    const latestFolder = await getLatestOutputFolder(env);
+    if (!latestFolder) return null;
+
+    const fileName = `CDP ${cdp4}.pdf`;
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encodeURIComponent(fileName)}`;
+    const res = await githubFetch(env, url);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    return data.download_url ? data : null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -161,7 +153,7 @@ async function getLatestOutputFolder(env) {
   if (!res.ok) return null;
   const items = await res.json();
   const folders = items
-    .filter(item => item.type === "dir")
+    .filter(item => item.type === "dir" && /^\d{4}-\d{2}-\d{2}$/.test(item.name))
     .map(item => item.name)
     .sort()
     .reverse();
