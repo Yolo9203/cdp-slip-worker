@@ -22,6 +22,18 @@ export default {
       return new Response("OK");
     }
 
+    // DEBUG FILE
+    if (text.startsWith("debugfile ")) {
+      const num = text.replace("debugfile ", "").trim().replace(/\D/g, "").padStart(4, "0");
+      const latestFolder = await getLatestOutputFolder(env);
+      const fileName = `CDP ${num}.pdf`;
+      const encoded = fileName.replace(/ /g, "%20");
+      const fileUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encoded}`;
+      const res = await githubFetch(env, fileUrl);
+      await sendMessage(env, chatId, `Folder: ${latestFolder}\nFile: ${fileName}\nStatus: ${res.status}\nURL: ${fileUrl}`);
+      return new Response("OK");
+    }
+
     const cdp = text.replace(/\D/g, "");
     if (!cdp) {
       await sendMessage(env, chatId, "Kirim nomor CDP. Contoh: 1064");
@@ -131,7 +143,9 @@ async function getSlipFile(env, cdp4) {
     if (!latestFolder) return null;
 
     const fileName = `CDP ${cdp4}.pdf`;
-    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encodeURIComponent(fileName)}`;
+    // Ganti spasi dengan %20 manual, bukan encodeURIComponent
+    const encoded = fileName.replace(/ /g, "%20");
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encoded}`;
     const res = await githubFetch(env, url);
     if (!res.ok) return null;
 
