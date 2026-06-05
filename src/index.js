@@ -4,6 +4,18 @@ const EMAIL_CACHE_PATH = "data/email-cache.json";
 
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+
+    // GET /slip/1010 → redirect ke download_url asli
+    if (request.method === "GET" && url.pathname.startsWith("/slip/")) {
+      const cdp4 = url.pathname.replace("/slip/", "").replace(/\D/g, "").padStart(4, "0");
+      const slipData = await getSlipFile(env, cdp4);
+      if (!slipData) {
+        return new Response("File tidak ditemukan", { status: 404 });
+      }
+      return Response.redirect(slipData.download_url, 302);
+    }
+
     if (request.method === "GET") {
       return new Response("CDP Slip Bot aktif");
     }
@@ -46,8 +58,8 @@ export default {
 
         let emailMsg = `📧 EMAIL (CDP ${num})\n`;
         try {
-          const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EMAIL_CACHE_PATH}`;
-          const res = await githubFetch(env, url);
+          const url2 = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EMAIL_CACHE_PATH}`;
+          const res = await githubFetch(env, url2);
           emailMsg += `Status fetch: ${res.status}\n`;
           if (res.ok) {
             const meta = await res.json();
@@ -74,8 +86,8 @@ export default {
 
         let excelMsg = `📊 EXCEL (CDP ${num})\n`;
         try {
-          const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/data/excel-cache.json`;
-          const res = await githubFetch(env, url);
+          const url2 = `https://api.github.com/repos/${OWNER}/${REPO}/contents/data/excel-cache.json`;
+          const res = await githubFetch(env, url2);
           excelMsg += `Status fetch: ${res.status}\n`;
           if (res.ok) {
             const meta = await res.json();
@@ -99,9 +111,9 @@ export default {
           if (latestFolder) {
             const fileName = `CDP ${num}.pdf`;
             const encoded = fileName.replace(/ /g, "%20");
-            const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encoded}`;
-            slipMsg += `URL dicari: ${url}\n`;
-            const res = await githubFetch(env, url);
+            const url2 = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encoded}`;
+            slipMsg += `URL dicari: ${url2}\n`;
+            const res = await githubFetch(env, url2);
             slipMsg += `Status: ${res.status}\n`;
             if (res.ok) {
               const data = await res.json();
@@ -124,26 +136,6 @@ export default {
         }
         await sendMessage(env, chatId, slipMsg);
 
-        return new Response("OK");
-      }
-
-      // DEBUG HTML
-      if (text.startsWith("debughtml ")) {
-        const num = text.replace("debughtml ", "").trim().replace(/\D/g, "").padStart(4, "0");
-        const cdpKey = `CDP ${num}`;
-        const slipData = await getSlipFile(env, num);
-        if (!slipData) {
-          await sendMessage(env, chatId, `Slip file tidak ditemukan untuk ${cdpKey}`);
-          return new Response("OK");
-        }
-        const htmlMsg = `🔍 Test HTML: ${cdpKey}\n\n📄 <a href="${escapeUrl(slipData.download_url)}">Slip Transfer ${cdpKey}</a>`;
-        const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
-        const tgBody = await tgRes.json();
-        if (!tgBody.ok) {
-          await sendMessage(env, chatId, `❌ HTML gagal!\nError: ${tgBody.description}\nURL: ${slipData.download_url}`);
-        } else {
-          await sendMessage(env, chatId, `✅ HTML berhasil dikirim`);
-        }
         return new Response("OK");
       }
 
@@ -184,9 +176,7 @@ export default {
       else if (progress === 66) statusText = "⚙️ Diproses";
       else statusText = "📨 Pengajuan diterima";
 
-      // Susun pesan — slip link di antara nominal dan status
       let msg = `🔍 Hasil: ${cdpKey}\n\n`;
-
       if (emailData) {
         msg += `📧 EMAIL\n`;
         msg += `Dari    : ${emailData.from}\n`;
@@ -194,27 +184,21 @@ export default {
         msg += `Subject : ${emailData.subject}\n`;
         msg += `Nominal : ${emailData.nominal}\n`;
       }
-
-      if (slipData) {
-        // Slip link masuk di sini, sebelum status bar
-        msg += `📄 <a href="${escapeUrl(slipData.download_url)}">Slip Transfer ${cdpKey}</a>\n`;
-      }
-
       msg += `\n📊 Status\n`;
       msg += `${bar} ${progress}/100 ${statusText}`;
 
-      // Selalu kirim HTML (plain text tidak bisa render link)
-      const tgRes = await sendMessageHTML(env, chatId, msg);
-      const tgBody = await tgRes.json();
-
-      // Fallback jika HTML gagal — sangat jarang terjadi setelah escapeUrl
-      if (!tgBody.ok) {
-        let fallback = msg.replace(/<a href="[^"]*">([^<]*)<\/a>/g, "$1");
-        fallback = fallback.replace(/<[^>]+>/g, "");
-        await sendMessage(env, chatId, fallback);
-        if (slipData) {
-          await sendMessage(env, chatId, `📄 Link slip:\n${slipData.download_url}`);
+      if (slipData) {
+        // URL pendek: https://<worker-domain>/slip/1010
+        const shortUrl = `${url.origin}/slip/${cdp4}`;
+        const htmlMsg = msg + `\n\n📄 <a href="${shortUrl}">Slip Transfer ${cdpKey}</a>`;
+        const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
+        const tgBody = await tgRes.json();
+        if (!tgBody.ok) {
+          // Fallback ke tombol jika HTML masih gagal
+          await sendMessageWithButton(env, chatId, msg, `📄 Slip Transfer ${cdpKey}`, shortUrl);
         }
+      } else {
+        await sendMessage(env, chatId, msg);
       }
 
     } catch (err) {
@@ -224,11 +208,6 @@ export default {
     return new Response("OK");
   },
 };
-
-// Encode URL untuk tag <a href> — agar & dan karakter khusus tidak merusak HTML Telegram
-function escapeUrl(url) {
-  return url.replace(/&/g, "&amp;");
-}
 
 async function getEmailData(env, cdp4) {
   try {
@@ -245,7 +224,6 @@ async function getEmailData(env, cdp4) {
     );
     if (!found) return null;
 
-    // Regex diperluas: tangkap nominal dengan titik/koma/spasi, dan abaikan tanda - di akhir
     const nominalMatch = found.subject.match(/Rp\.?\s*([\d.,]+)/i);
     const nominal = nominalMatch ? `Rp ${nominalMatch[1].replace(/-$/, "")}` : "-";
 
@@ -334,6 +312,22 @@ function sendMessageHTML(env, chatId, text) {
       text,
       parse_mode: "HTML",
       disable_web_page_preview: true,
+    }),
+  });
+}
+
+function sendMessageWithButton(env, chatId, text, buttonLabel, buttonUrl) {
+  return fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: buttonLabel, url: buttonUrl }
+        ]]
+      }
     }),
   });
 }
