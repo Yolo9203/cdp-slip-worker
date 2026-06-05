@@ -1,6 +1,6 @@
 const OWNER = "Yolo9203";
 const REPO = "Repository-name-BRI-SLIP-GROUPER";
-const EMAIL_CACHE_PATH = "data/email-cache.json"; // hasil fetch POP3 dari GitHub Actions
+const EMAIL_CACHE_PATH = "data/email-cache.json";
 
 export default {
   async fetch(request, env) {
@@ -13,6 +13,15 @@ export default {
     const text = (update.message?.text || "").trim();
     if (!chatId) return new Response("OK");
 
+    // DEBUG SEMENTARA
+    if (text === "debug") {
+      const testUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output`;
+      const res = await githubFetch(env, testUrl);
+      const body = await res.text();
+      await sendMessage(env, chatId, `Status: ${res.status}\n\n${body.slice(0, 500)}`);
+      return new Response("OK");
+    }
+
     const cdp = text.replace(/\D/g, "");
     if (!cdp) {
       await sendMessage(env, chatId, "Kirim nomor CDP. Contoh: 1064");
@@ -22,27 +31,23 @@ export default {
     const cdp4 = cdp.padStart(4, "0");
     const cdpKey = `CDP ${cdp4}`;
 
-    // Jalankan 3 pengecekan paralel
     const [emailData, excelFound, slipData] = await Promise.all([
       getEmailData(env, cdp4),
       checkExcel(env, cdp4),
       getSlipFile(env, cdp4),
     ]);
 
-    // Hitung progress
     let progress = 0;
     let statusText = "";
     if (emailData) progress = 33;
     if (emailData && excelFound) progress = 66;
     if (emailData && excelFound && slipData) progress = 100;
 
-    // Jika tidak ada data sama sekali
     if (progress === 0) {
       await sendMessage(env, chatId, `❌ CDP ${cdp4} tidak ditemukan di sistem.`);
       return new Response("OK");
     }
 
-    // Buat progress bar
     const filled = Math.round(progress / 10);
     const empty = 10 - filled;
     const bar = "█".repeat(filled) + "░".repeat(empty);
@@ -51,7 +56,6 @@ export default {
     else if (progress === 66) statusText = "⚙️ Diproses";
     else statusText = "📨 Pengajuan diterima";
 
-    // Susun pesan
     let msg = `🔍 Hasil: ${cdpKey}\n\n`;
 
     if (emailData) {
@@ -62,13 +66,10 @@ export default {
       msg += `Nominal : ${emailData.nominal}\n\n`;
     }
 
-    // Progress bar
     msg += `📊 Status\n`;
     msg += `${bar} ${progress}/100 ${statusText}`;
 
-    // Kirim pesan teks dulu
     if (slipData) {
-      // Kirim dengan link tersembunyi dalam tulisan menggunakan parse_mode HTML
       const slipMsg = msg + `\n\n📄 <a href="${slipData.download_url}">Slip Transfer ${cdpKey}</a>`;
       await sendMessageHTML(env, chatId, slipMsg);
     } else {
@@ -79,7 +80,6 @@ export default {
   },
 };
 
-// ─── Email: baca dari email-cache.json di GitHub ───────────────────────────
 async function getEmailData(env, cdp4) {
   try {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EMAIL_CACHE_PATH}`;
@@ -90,13 +90,11 @@ async function getEmailData(env, cdp4) {
     const content = atob(meta.content.replace(/\n/g, ""));
     const emails = JSON.parse(content);
 
-    // Cari email yang subject-nya mengandung CDP XXXX
     const found = emails.find(e =>
       e.subject && e.subject.toUpperCase().includes(`CDP ${cdp4}`)
     );
     if (!found) return null;
 
-    // Ekstrak nominal dari subject (format: Rp 630.000,-)
     const nominalMatch = found.subject.match(/Rp[\s]?([\d.,]+)/i);
     const nominal = nominalMatch ? `Rp ${nominalMatch[1]}` : "-";
 
@@ -111,7 +109,6 @@ async function getEmailData(env, cdp4) {
   }
 }
 
-// ─── Excel: cek excel-cache.json (di-generate GitHub Actions dari kolom D) ──
 async function checkExcel(env, cdp4) {
   try {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/data/excel-cache.json`;
@@ -120,7 +117,7 @@ async function checkExcel(env, cdp4) {
 
     const meta = await res.json();
     const content = atob(meta.content.replace(/\n/g, ""));
-    const cdpList = JSON.parse(content); // array of "0014", "2378", dst
+    const cdpList = JSON.parse(content);
 
     return cdpList.includes(cdp4);
   } catch {
@@ -128,7 +125,6 @@ async function checkExcel(env, cdp4) {
   }
 }
 
-// ─── Slip PDF: cek di folder output GitHub ─────────────────────────────────
 async function getSlipFile(env, cdp4) {
   try {
     const latestFolder = await getLatestOutputFolder(env);
@@ -146,7 +142,6 @@ async function getSlipFile(env, cdp4) {
   }
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
 async function getLatestOutputFolder(env) {
   const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output`;
   const res = await githubFetch(env, url);
