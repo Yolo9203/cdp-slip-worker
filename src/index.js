@@ -136,7 +136,7 @@ export default {
           await sendMessage(env, chatId, `Slip file tidak ditemukan untuk ${cdpKey}`);
           return new Response("OK");
         }
-        const htmlMsg = `🔍 Test HTML: ${cdpKey}\n\n📄 <a href="${slipData.download_url}">Slip Transfer ${cdpKey}</a>`;
+        const htmlMsg = `🔍 Test HTML: ${cdpKey}\n\n📄 <a href="${escapeUrl(slipData.download_url)}">Slip Transfer ${cdpKey}</a>`;
         const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
         const tgBody = await tgRes.json();
         if (!tgBody.ok) {
@@ -157,7 +157,6 @@ export default {
       const cdp4 = cdp.padStart(4, "0");
       const cdpKey = `CDP ${cdp4}`;
 
-      // Fetch satu per satu (bukan Promise.all) supaya error tiap step bisa ditangkap
       let emailData = null;
       let excelFound = false;
       let slipData = null;
@@ -185,6 +184,7 @@ export default {
       else if (progress === 66) statusText = "⚙️ Diproses";
       else statusText = "📨 Pengajuan diterima";
 
+      // Susun pesan — slip link di antara nominal dan status
       let msg = `🔍 Hasil: ${cdpKey}\n\n`;
 
       if (emailData) {
@@ -192,32 +192,43 @@ export default {
         msg += `Dari    : ${emailData.from}\n`;
         msg += `Tanggal : ${emailData.date}\n`;
         msg += `Subject : ${emailData.subject}\n`;
-        msg += `Nominal : ${emailData.nominal}\n\n`;
+        msg += `Nominal : ${emailData.nominal}\n`;
       }
 
-      msg += `📊 Status\n`;
+      if (slipData) {
+        // Slip link masuk di sini, sebelum status bar
+        msg += `📄 <a href="${escapeUrl(slipData.download_url)}">Slip Transfer ${cdpKey}</a>\n`;
+      }
+
+      msg += `\n📊 Status\n`;
       msg += `${bar} ${progress}/100 ${statusText}`;
 
-      if (slipData) {
-        const htmlMsg = msg + `\n\n📄 <a href="${slipData.download_url}">Slip Transfer ${cdpKey}</a>`;
-        const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
-        const tgBody = await tgRes.json();
-        if (!tgBody.ok) {
-          await sendMessage(env, chatId, msg);
-          await sendMessage(env, chatId, `📄 Slip Transfer ${cdpKey}:\n${slipData.download_url}`);
+      // Selalu kirim HTML (plain text tidak bisa render link)
+      const tgRes = await sendMessageHTML(env, chatId, msg);
+      const tgBody = await tgRes.json();
+
+      // Fallback jika HTML gagal — sangat jarang terjadi setelah escapeUrl
+      if (!tgBody.ok) {
+        let fallback = msg.replace(/<a href="[^"]*">([^<]*)<\/a>/g, "$1");
+        fallback = fallback.replace(/<[^>]+>/g, "");
+        await sendMessage(env, chatId, fallback);
+        if (slipData) {
+          await sendMessage(env, chatId, `📄 Link slip:\n${slipData.download_url}`);
         }
-      } else {
-        await sendMessage(env, chatId, msg);
       }
 
     } catch (err) {
-      // Tangkap semua error tak terduga — user tetap dapat balasan
       await sendMessage(env, chatId, `⚠️ Terjadi error tidak terduga: ${err.message}`);
     }
 
     return new Response("OK");
   },
 };
+
+// Encode URL untuk tag <a href> — agar & dan karakter khusus tidak merusak HTML Telegram
+function escapeUrl(url) {
+  return url.replace(/&/g, "&amp;");
+}
 
 async function getEmailData(env, cdp4) {
   try {
@@ -234,8 +245,9 @@ async function getEmailData(env, cdp4) {
     );
     if (!found) return null;
 
-    const nominalMatch = found.subject.match(/Rp[\s]?([\d.,]+)/i);
-    const nominal = nominalMatch ? `Rp ${nominalMatch[1]}` : "-";
+    // Regex diperluas: tangkap nominal dengan titik/koma/spasi, dan abaikan tanda - di akhir
+    const nominalMatch = found.subject.match(/Rp\.?\s*([\d.,]+)/i);
+    const nominal = nominalMatch ? `Rp ${nominalMatch[1].replace(/-$/, "")}` : "-";
 
     return {
       from: found.from,
