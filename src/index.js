@@ -104,7 +104,7 @@ export default {
           slipMsg += `Status: ${res.status}\n`;
           if (res.ok) {
             const data = await res.json();
-            slipMsg += `✅ File ada! download_url: ${data.download_url?.slice(0, 80)}...\n`;
+            slipMsg += `✅ File ada!\ndownload_url:\n${data.download_url}\n`;
           } else {
             slipMsg += `❌ File tidak ditemukan\n`;
             const folderUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}`;
@@ -123,6 +123,26 @@ export default {
       }
       await sendMessage(env, chatId, slipMsg);
 
+      return new Response("OK");
+    }
+
+    // DEBUG KIRIM HTML — test apakah sendMessageHTML berjalan untuk CDP tertentu
+    if (text.startsWith("debughtml ")) {
+      const num = text.replace("debughtml ", "").trim().replace(/\D/g, "").padStart(4, "0");
+      const cdpKey = `CDP ${num}`;
+      const slipData = await getSlipFile(env, num);
+      if (!slipData) {
+        await sendMessage(env, chatId, `Slip file tidak ditemukan untuk ${cdpKey}`);
+        return new Response("OK");
+      }
+      const htmlMsg = `🔍 Test HTML: ${cdpKey}\n\n📄 <a href="${slipData.download_url}">Slip Transfer ${cdpKey}</a>`;
+      const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
+      const tgBody = await tgRes.json();
+      if (!tgBody.ok) {
+        await sendMessage(env, chatId, `❌ HTML gagal!\nError: ${tgBody.description}\nURL: ${slipData.download_url}`);
+      } else {
+        await sendMessage(env, chatId, `✅ HTML berhasil dikirim`);
+      }
       return new Response("OK");
     }
 
@@ -174,8 +194,14 @@ export default {
     msg += `${bar} ${progress}/100 ${statusText}`;
 
     if (slipData) {
-      const slipMsg = msg + `\n\n📄 <a href="${slipData.download_url}">Slip Transfer ${cdpKey}</a>`;
-      await sendMessageHTML(env, chatId, slipMsg);
+      const htmlMsg = msg + `\n\n📄 <a href="${slipData.download_url}">Slip Transfer ${cdpKey}</a>`;
+      const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
+      const tgBody = await tgRes.json();
+      // Jika HTML gagal (misal URL bermasalah), fallback ke plain text + link terpisah
+      if (!tgBody.ok) {
+        await sendMessage(env, chatId, msg);
+        await sendMessage(env, chatId, `📄 Slip Transfer ${cdpKey}:\n${slipData.download_url}`);
+      }
     } else {
       await sendMessage(env, chatId, msg);
     }
