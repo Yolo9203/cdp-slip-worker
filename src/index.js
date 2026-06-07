@@ -22,22 +22,34 @@ export default {
       return new Response("CDP Slip Bot aktif");
     }
 
-    let update, chatId, text;
+    let update, chatId, text, username;
     try {
       update = await request.json();
       chatId = update.message?.chat?.id;
       text = (update.message?.text || "").trim();
+      username = update.message?.from?.username || null;
     } catch {
       return new Response("OK");
     }
     if (!chatId) return new Response("OK");
 
     try {
-      // --- CEK WHITELIST ---
-      const allowedUsers = await getAllowedUsers(env);
-      if (allowedUsers.length > 0 && !allowedUsers.includes(String(chatId))) {
+      // --- CEK USERNAME ---
+      if (!username) {
         await sendMessage(env, chatId,
-          `🚫 Kamu tidak memiliki otorisasi akses ke bot ini.\n` +
+          `⚠️ Kamu belum memiliki username Telegram.\n\n` +
+          `Silakan buat username terlebih dahulu:\n` +
+          `Pengaturan → Edit Profil → Username\n\n` +
+          `Setelah membuat username, coba lagi.`
+        );
+        return new Response("OK");
+      }
+
+      // --- CEK WHITELIST (berbasis username) ---
+      const allowedUsers = await getAllowedUsers(env);
+      if (allowedUsers.length > 0 && !allowedUsers.includes(username.toLowerCase())) {
+        await sendMessage(env, chatId,
+          `🚫 Username @${username} tidak memiliki otorisasi akses ke bot ini.\n\n` +
           `Silakan hubungi CDP via email.`
         );
         return new Response("OK");
@@ -46,7 +58,7 @@ export default {
       // --- /start ---
       if (text === "/start") {
         await sendMessage(env, chatId,
-          `👋 Selamat datang!\n\n` +
+          `👋 Selamat datang, @${username}!\n\n` +
           `Kamu terpilih untuk mengakses Bot Cek Slip Transfer CDP.\n` +
           `Gunakan bot ini dengan bijak dan bertanggung jawab.\n\n` +
           `📌 Cara pakai:\n` +
@@ -54,7 +66,8 @@ export default {
           `⚠️ Harap diperhatikan:\n` +
           `• Jangan spam — bot berjalan di infrastruktur gratis\n` +
           `• Jika terasa lambat, mohon bersabar 🙏\n` +
-          `• Bot hanya melayani pengecekan slip transfer\n\n` +
+          `• Bot hanya melayani pengecekan slip transfer maximal 30 Hari Kalender\n` +
+          `• Jangan ganti username Telegram — akses akan hilang\n\n` +
           `🙏 Terima kasih kepada:\n` +
           `GitHub · Cloudflare · Claude AI · ChatGPT\n` +
           `dan semua pihak yang membantu pengembangan bot ini.`
@@ -68,7 +81,7 @@ export default {
         return new Response("OK");
       }
 
-      // --- DEBUG: status output folder ---
+      // --- DEBUG ---
       if (text === "debug") {
         const testUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output`;
         const res = await githubFetch(env, testUrl);
@@ -77,7 +90,6 @@ export default {
         return new Response("OK");
       }
 
-      // --- DEBUG: cek file PDF tertentu ---
       if (text.startsWith("debugfile ")) {
         const num = text.replace("debugfile ", "").trim().replace(/\D/g, "").padStart(4, "0");
         const latestFolder = await getLatestOutputFolder(env);
@@ -91,7 +103,6 @@ export default {
         return new Response("OK");
       }
 
-      // --- DEBUG: compare 2 CDP ---
       if (text === "debug1010" || text === "debug1049") {
         const num = text === "debug1010" ? "1010" : "1049";
 
@@ -220,7 +231,6 @@ export default {
 
       let msg = `🔍 Hasil: ${cdpKey}\n\n`;
 
-      // ✅ FIX: Tanggal Proses sekarang tampil di dalam blok EMAIL
       if (emailData) {
         msg += `📧 EMAIL\n`;
         msg += `Dari       : ${emailData.from}\n`;
@@ -250,6 +260,7 @@ export default {
   },
 };
 
+// ✅ Baca username dari allowed-users.json (tanpa @, case-insensitive)
 async function getAllowedUsers(env) {
   try {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${ALLOWED_USERS_PATH}`;
@@ -257,7 +268,7 @@ async function getAllowedUsers(env) {
     if (!res.ok) return [];
     const meta = await res.json();
     const content = atob(meta.content.replace(/\n/g, ""));
-    return JSON.parse(content).map(String);
+    return JSON.parse(content).map(u => u.toLowerCase().replace(/^@/, ""));
   } catch {
     return [];
   }
@@ -268,25 +279,16 @@ async function getEmailData(env, cdp4) {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EMAIL_CACHE_PATH}`;
     const res = await githubFetch(env, url);
     if (!res.ok) return null;
-
     const meta = await res.json();
     const content = atob(meta.content.replace(/\n/g, ""));
     const emails = JSON.parse(content);
-
     const found = emails.find(e =>
       e.subject && e.subject.toUpperCase().includes(`CDP ${cdp4}`)
     );
     if (!found) return null;
-
     const nominalMatch = found.subject.match(/Rp\.?\s*([\d.,]+)/i);
     const nominal = nominalMatch ? `Rp ${nominalMatch[1].replace(/-$/, "")}` : "-";
-
-    return {
-      from: found.from,
-      date: found.date,
-      subject: found.subject,
-      nominal,
-    };
+    return { from: found.from, date: found.date, subject: found.subject, nominal };
   } catch {
     return null;
   }
@@ -297,14 +299,11 @@ async function getExcelData(env, cdp4) {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EXCEL_CACHE_PATH}`;
     const res = await githubFetch(env, url);
     if (!res.ok) return null;
-
     const meta = await res.json();
     const content = atob(meta.content.replace(/\n/g, ""));
     const cache = JSON.parse(content);
-
     const cdpList = Array.isArray(cache) ? cache : (cache.cdp_list || []);
     const tanggalMap = Array.isArray(cache) ? {} : (cache.tanggal_proses || {});
-
     return {
       found: cdpList.includes(cdp4),
       tanggal_proses: tanggalMap[cdp4] || null,
@@ -318,13 +317,11 @@ async function getSlipFile(env, cdp4) {
   try {
     const latestFolder = await getLatestOutputFolder(env);
     if (!latestFolder) return null;
-
     const fileName = `CDP ${cdp4}.pdf`;
     const encoded = fileName.replace(/ /g, "%20");
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encoded}`;
     const res = await githubFetch(env, url);
     if (!res.ok) return null;
-
     const data = await res.json();
     return data.download_url ? data : null;
   } catch {
@@ -371,9 +368,7 @@ function sendMessageWithButton(env, chatId, text, buttonLabel, buttonUrl) {
       chat_id: chatId,
       text,
       reply_markup: {
-        inline_keyboard: [[
-          { text: buttonLabel, url: buttonUrl }
-        ]]
+        inline_keyboard: [[{ text: buttonLabel, url: buttonUrl }]]
       }
     }),
   });
