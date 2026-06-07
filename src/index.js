@@ -222,10 +222,9 @@ export default {
         msg += `Tanggal : ${emailData.date}\n`;
         msg += `Subject : ${emailData.subject}\n`;
         msg += `Nominal : ${emailData.nominal}\n`;
-      }
-
-      if (tanggalProses) {
+       if (tanggalProses) {
         msg += `📅 Tgl Proses: ${tanggalProses}\n`;
+      }
       }
 
       msg += `\n📊 Status\n`;
