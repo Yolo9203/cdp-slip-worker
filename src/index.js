@@ -1,6 +1,8 @@
 const OWNER = "Yolo9203";
 const REPO = "Repository-name-BRI-SLIP-GROUPER";
 const EMAIL_CACHE_PATH = "data/email-cache.json";
+const EXCEL_CACHE_PATH = "data/excel-cache.json";
+const ALLOWED_USERS_PATH = "data/allowed-users.json";
 
 export default {
   async fetch(request, env) {
@@ -31,7 +33,38 @@ export default {
     if (!chatId) return new Response("OK");
 
     try {
-      // DEBUG SEMENTARA
+      // --- CEK WHITELIST ---
+      const allowedUsers = await getAllowedUsers(env);
+      if (allowedUsers.length > 0 && !allowedUsers.includes(String(chatId))) {
+        await sendMessage(env, chatId,
+          `🚫 Kamu tidak memiliki otorisasi akses ke bot ini.\n` +
+          `Silakan hubungi CDP via email.`
+        );
+        return new Response("OK");
+      }
+
+      // --- /start ---
+      if (text === "/start") {
+        await sendMessage(env, chatId,
+          `👋 Selamat datang!\n\n` +
+          `Kamu terpilih untuk mengakses *Bot Cek Slip Transfer CDP*.\n` +
+          `Gunakan bot ini dengan bijak dan bertanggung jawab.\n\n` +
+          `📌 Cara pakai:\n` +
+          `Cukup kirim nomor CDP kamu, contoh: 1064\n\n` +
+          `⚠️ Harap diperhatikan:\n` +
+          `• Jangan spam — bot berjalan di infrastruktur gratis\n` +
+          `• Jika terasa lambat, mohon bersabar 🙏\n` +
+          `• Bot hanya melayani pengecekan slip transfer\n\n` +
+          `📞 Butuh bantuan lain?\n` +
+          `DM WhatsApp: 082153339483\n\n` +
+          `🙏 Terima kasih kepada:\n` +
+          `GitHub · Cloudflare · Claude AI · ChatGPT\n` +
+          `dan semua pihak yang membantu pengembangan bot ini.`
+        );
+        return new Response("OK");
+      }
+
+      // --- DEBUG: status output folder ---
       if (text === "debug") {
         const testUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output`;
         const res = await githubFetch(env, testUrl);
@@ -40,7 +73,7 @@ export default {
         return new Response("OK");
       }
 
-      // DEBUG FILE
+      // --- DEBUG: cek file PDF tertentu ---
       if (text.startsWith("debugfile ")) {
         const num = text.replace("debugfile ", "").trim().replace(/\D/g, "").padStart(4, "0");
         const latestFolder = await getLatestOutputFolder(env);
@@ -48,11 +81,13 @@ export default {
         const encoded = fileName.replace(/ /g, "%20");
         const fileUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output/${latestFolder}/${encoded}`;
         const res = await githubFetch(env, fileUrl);
-        await sendMessage(env, chatId, `Folder: ${latestFolder}\nFile: ${fileName}\nStatus: ${res.status}\nURL: ${fileUrl}`);
+        await sendMessage(env, chatId,
+          `Folder: ${latestFolder}\nFile: ${fileName}\nStatus: ${res.status}\nURL: ${fileUrl}`
+        );
         return new Response("OK");
       }
 
-      // DEBUG COMPARE
+      // --- DEBUG: compare 2 CDP ---
       if (text === "debug1010" || text === "debug1049") {
         const num = text === "debug1010" ? "1010" : "1049";
 
@@ -86,18 +121,18 @@ export default {
 
         let excelMsg = `📊 EXCEL (CDP ${num})\n`;
         try {
-          const url2 = `https://api.github.com/repos/${OWNER}/${REPO}/contents/data/excel-cache.json`;
+          const url2 = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EXCEL_CACHE_PATH}`;
           const res = await githubFetch(env, url2);
           excelMsg += `Status fetch: ${res.status}\n`;
           if (res.ok) {
             const meta = await res.json();
             const content = atob(meta.content.replace(/\n/g, ""));
-            const cdpList = JSON.parse(content);
+            const cache = JSON.parse(content);
+            const cdpList = cache.cdp_list || cache;
             const found = cdpList.includes(num);
             excelMsg += found ? `✅ CDP ${num} ADA di excel-cache\n` : `❌ CDP ${num} TIDAK ada\n`;
-            const idx = cdpList.findIndex(v => v >= num);
-            const nearby = cdpList.slice(Math.max(0, idx - 2), idx + 3);
-            excelMsg += `Entries terdekat: ${JSON.stringify(nearby)}\n`;
+            const tgl = cache.tanggal_proses?.[num] || "-";
+            excelMsg += `Tanggal proses: ${tgl}\n`;
           }
         } catch (err) {
           excelMsg += `Error: ${err.message}\n`;
@@ -139,7 +174,7 @@ export default {
         return new Response("OK");
       }
 
-      // MAIN FLOW
+      // --- MAIN FLOW ---
       const cdp = text.replace(/\D/g, "");
       if (!cdp) {
         await sendMessage(env, chatId, "Kirim nomor CDP. Contoh: 1064");
@@ -150,12 +185,15 @@ export default {
       const cdpKey = `CDP ${cdp4}`;
 
       let emailData = null;
-      let excelFound = false;
+      let excelData = null;
       let slipData = null;
 
       try { emailData = await getEmailData(env, cdp4); } catch {}
-      try { excelFound = await checkExcel(env, cdp4); } catch {}
+      try { excelData = await getExcelData(env, cdp4); } catch {}
       try { slipData = await getSlipFile(env, cdp4); } catch {}
+
+      const excelFound = excelData?.found || false;
+      const tanggalProses = excelData?.tanggal_proses || null;
 
       let progress = 0;
       let statusText = "";
@@ -177,6 +215,7 @@ export default {
       else statusText = "📨 Pengajuan diterima";
 
       let msg = `🔍 Hasil: ${cdpKey}\n\n`;
+
       if (emailData) {
         msg += `📧 EMAIL\n`;
         msg += `Dari    : ${emailData.from}\n`;
@@ -184,19 +223,17 @@ export default {
         msg += `Subject : ${emailData.subject}\n`;
         msg += `Nominal : ${emailData.nominal}\n`;
       }
+
+      if (tanggalProses) {
+        msg += `📅 Tgl Proses: ${tanggalProses}\n`;
+      }
+
       msg += `\n📊 Status\n`;
       msg += `${bar} ${progress}/100 ${statusText}`;
 
       if (slipData) {
-        // URL pendek: https://<worker-domain>/slip/1010
         const shortUrl = `${url.origin}/slip/${cdp4}`;
-        const htmlMsg = msg + `\n\n📄 <a href="${shortUrl}">Slip Transfer ${cdpKey}</a>`;
-        const tgRes = await sendMessageHTML(env, chatId, htmlMsg);
-        const tgBody = await tgRes.json();
-        if (!tgBody.ok) {
-          // Fallback ke tombol jika HTML masih gagal
-          await sendMessageWithButton(env, chatId, msg, `📄 Slip Transfer ${cdpKey}`, shortUrl);
-        }
+        await sendMessageWithButton(env, chatId, msg, `📄 Slip Transfer ${cdpKey}`, shortUrl);
       } else {
         await sendMessage(env, chatId, msg);
       }
@@ -208,6 +245,20 @@ export default {
     return new Response("OK");
   },
 };
+
+// Ambil daftar user yang diizinkan dari repo
+async function getAllowedUsers(env) {
+  try {
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${ALLOWED_USERS_PATH}`;
+    const res = await githubFetch(env, url);
+    if (!res.ok) return [];
+    const meta = await res.json();
+    const content = atob(meta.content.replace(/\n/g, ""));
+    return JSON.parse(content).map(String);
+  } catch {
+    return [];
+  }
+}
 
 async function getEmailData(env, cdp4) {
   try {
@@ -238,19 +289,27 @@ async function getEmailData(env, cdp4) {
   }
 }
 
-async function checkExcel(env, cdp4) {
+// Baca excel-cache — support format lama (array) dan baru (object)
+async function getExcelData(env, cdp4) {
   try {
-    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/data/excel-cache.json`;
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EXCEL_CACHE_PATH}`;
     const res = await githubFetch(env, url);
-    if (!res.ok) return false;
+    if (!res.ok) return null;
 
     const meta = await res.json();
     const content = atob(meta.content.replace(/\n/g, ""));
-    const cdpList = JSON.parse(content);
+    const cache = JSON.parse(content);
 
-    return cdpList.includes(cdp4);
+    // Support format lama (array) dan format baru (object)
+    const cdpList = Array.isArray(cache) ? cache : (cache.cdp_list || []);
+    const tanggalMap = Array.isArray(cache) ? {} : (cache.tanggal_proses || {});
+
+    return {
+      found: cdpList.includes(cdp4),
+      tanggal_proses: tanggalMap[cdp4] || null,
+    };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -300,19 +359,6 @@ function sendMessage(env, chatId, text) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text }),
-  });
-}
-
-function sendMessageHTML(env, chatId, text) {
-  return fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-      disable_web_page_preview: true,
-    }),
   });
 }
 
