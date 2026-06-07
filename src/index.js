@@ -47,7 +47,7 @@ export default {
       if (text === "/start") {
         await sendMessage(env, chatId,
           `👋 Selamat datang!\n\n` +
-          `Kamu terpilih untuk mengakses *Bot Cek Slip Transfer CDP*.\n` +
+          `Kamu terpilih untuk mengakses Bot Cek Slip Transfer CDP.\n` +
           `Gunakan bot ini dengan bijak dan bertanggung jawab.\n\n` +
           `📌 Cara pakai:\n` +
           `Cukup kirim nomor CDP kamu, contoh: 1064\n\n` +
@@ -55,11 +55,15 @@ export default {
           `• Jangan spam — bot berjalan di infrastruktur gratis\n` +
           `• Jika terasa lambat, mohon bersabar 🙏\n` +
           `• Bot hanya melayani pengecekan slip transfer\n\n` +
-          `📞 Butuh bantuan lain?\n` +
-          `DM WhatsApp: 082153339483\n\n` +
           `🙏 Terima kasih kepada:\n` +
           `GitHub · Cloudflare · Claude AI · ChatGPT\n` +
           `dan semua pihak yang membantu pengembangan bot ini.`
+        );
+        await sendMessageWithButton(
+          env, chatId,
+          `📞 Butuh bantuan lain? Klik tombol di bawah:`,
+          `💬 Chat WhatsApp`,
+          `https://wa.me/6282153339483`
         );
         return new Response("OK");
       }
@@ -128,7 +132,7 @@ export default {
             const meta = await res.json();
             const content = atob(meta.content.replace(/\n/g, ""));
             const cache = JSON.parse(content);
-            const cdpList = cache.cdp_list || cache;
+            const cdpList = Array.isArray(cache) ? cache : (cache.cdp_list || []);
             const found = cdpList.includes(num);
             excelMsg += found ? `✅ CDP ${num} ADA di excel-cache\n` : `❌ CDP ${num} TIDAK ada\n`;
             const tgl = cache.tanggal_proses?.[num] || "-";
@@ -216,15 +220,16 @@ export default {
 
       let msg = `🔍 Hasil: ${cdpKey}\n\n`;
 
+      // ✅ FIX: Tanggal Proses sekarang tampil di dalam blok EMAIL
       if (emailData) {
         msg += `📧 EMAIL\n`;
-        msg += `Dari    : ${emailData.from}\n`;
-        msg += `Tanggal : ${emailData.date}\n`;
-        msg += `Subject : ${emailData.subject}\n`;
-        msg += `Nominal : ${emailData.nominal}\n`;
-       if (tanggalProses) {
-        msg += `📅 Tgl Proses: ${tanggalProses}\n`;
-      }
+        msg += `Dari       : ${emailData.from}\n`;
+        msg += `Tanggal    : ${emailData.date}\n`;
+        msg += `Subject    : ${emailData.subject}\n`;
+        msg += `Nominal    : ${emailData.nominal}\n`;
+        if (tanggalProses) {
+          msg += `Tgl Proses : ${tanggalProses}\n`;
+        }
       }
 
       msg += `\n📊 Status\n`;
@@ -245,7 +250,6 @@ export default {
   },
 };
 
-// Ambil daftar user yang diizinkan dari repo
 async function getAllowedUsers(env) {
   try {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${ALLOWED_USERS_PATH}`;
@@ -288,7 +292,6 @@ async function getEmailData(env, cdp4) {
   }
 }
 
-// Baca excel-cache — support format lama (array) dan baru (object)
 async function getExcelData(env, cdp4) {
   try {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EXCEL_CACHE_PATH}`;
@@ -299,7 +302,6 @@ async function getExcelData(env, cdp4) {
     const content = atob(meta.content.replace(/\n/g, ""));
     const cache = JSON.parse(content);
 
-    // Support format lama (array) dan format baru (object)
     const cdpList = Array.isArray(cache) ? cache : (cache.cdp_list || []);
     const tanggalMap = Array.isArray(cache) ? {} : (cache.tanggal_proses || {});
 
