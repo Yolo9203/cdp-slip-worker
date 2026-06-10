@@ -512,9 +512,7 @@ async function getSlipFilesFromIndex(env, cdp4) {
     const rows = Array.isArray(index) ? index : (index.items || []);
 
     const matches = rows.filter(row => {
-      if (String(row.cdp || "").padStart(4, "0") === cdp4) return true;
-      if (Array.isArray(row.cdp_list) && row.cdp_list.map(x => String(x).padStart(4, "0")).includes(cdp4)) return true;
-      return false;
+      return String(row.cdp || "").padStart(4, "0") === cdp4;
     });
 
     return matches.map(row => ({
