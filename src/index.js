@@ -10,17 +10,14 @@ const OUTPUT_INDEX_PATH = "data/output-index.json";
 /**
  * CDP Slip Worker
  *
- * Fitur utama:
+ * Sudah termasuk:
  * - Whitelist username Telegram dari data/allowed-users.json
- * - Cek CDP dari email-cache.json, excel-cache.json, dan output/
- * - Menampilkan beberapa pengajuan jika CDP sama muncul lebih dari satu kali
- * - Mencari slip di semua folder output/YYYY-MM-DD, bukan hanya folder terbaru
- * - Mendukung data baru:
- *   - excel-cache.json -> cdp_data
- *   - output-index.json -> hasil mapping PDF dari process.py
- * - Endpoint notifikasi:
- *   POST /notify
- *   Header: X-Notify-Secret: <NOTIFY_SECRET>
+ * - Simpan chat_id otomatis ke data/chat-ids.json
+ * - Cek CDP dari email-cache.json, excel-cache.json, dan output-index.json
+ * - CDP ganda tampil sebagai beberapa pengajuan
+ * - Slip dicari via output-index.json, fallback ke semua folder output/YYYY-MM-DD
+ * - POST /notify dari GitHub Actions
+ * - /notify mengirim notifikasi ke semua chat_id di data/chat-ids.json
  */
 
 export default {
@@ -32,7 +29,7 @@ export default {
       return handleNotify(request, env);
     }
 
-    // GET /slip/1010 atau /slip/1010?folder=2026-06-08
+    // GET /slip/1010 atau /slip/1010?folder=2026-06-08&file=CDP%201010.pdf
     if (request.method === "GET" && url.pathname.startsWith("/slip/")) {
       const cdp4 = url.pathname.replace("/slip/", "").replace(/\D/g, "").padStart(4, "0");
       const folder = url.searchParams.get("folder");
@@ -62,7 +59,6 @@ export default {
     if (!chatId) return new Response("OK");
 
     try {
-      // --- CEK USERNAME ---
       if (!username) {
         await sendMessage(env, chatId,
           `⚠️ Kamu belum memiliki username Telegram.\n\n` +
@@ -73,19 +69,20 @@ export default {
         return new Response("OK");
       }
 
-      // --- CEK WHITELIST USERNAME ---
       const allowedUsers = await getAllowedUsers(env);
-      if (allowedUsers.length > 0 && !allowedUsers.includes(username.toLowerCase())) {
+      const usernameKey = username.toLowerCase().replace(/^@/, "");
+
+      if (allowedUsers.length > 0 && !allowedUsers.includes(usernameKey)) {
         await sendMessage(env, chatId,
           `🚫 Username @${username} tidak memiliki otorisasi akses ke bot ini.\n\n` +
           `Silakan hubungi CDP via email.`
         );
         return new Response("OK");
       }
-      
+
+      // Simpan chat_id user yang sudah lolos whitelist.
       await saveChatId(env, username, chatId);
 
-      // --- /start ---
       if (text === "/start") {
         await sendMessage(env, chatId,
           `👋 Selamat datang, @${username}!\n\n` +
@@ -96,7 +93,7 @@ export default {
           `⚠️ Harap diperhatikan:\n` +
           `• Jangan spam — bot berjalan di infrastruktur gratis\n` +
           `• Jika terasa lambat, mohon bersabar 🙏\n` +
-          `• Bot hanya melayani pengecekan slip transfer maksimal sesuai data yang tersedia\n` +
+          `• Bot hanya melayani pengecekan slip transfer sesuai data yang tersedia\n` +
           `• Jangan ganti username Telegram — akses akan hilang\n\n` +
           `🙏 Terima kasih kepada:\n` +
           `GitHub · Cloudflare · Claude AI · ChatGPT\n` +
@@ -111,16 +108,18 @@ export default {
         return new Response("OK");
       }
 
-      // --- DEBUG UMUM ---
       if (text === "debug") {
-        const testUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/output`;
-        const res = await githubFetch(env, testUrl);
-        const body = await res.text();
-        await sendMessage(env, chatId, `Status: ${res.status}\n\n${body.slice(0, 500)}`);
+        const chatIds = await getNotifyChatIds(env);
+        await sendMessage(env, chatId,
+          `DEBUG\n` +
+          `User: @${username}\n` +
+          `Chat ID: ${chatId}\n` +
+          `Notify chat IDs: ${chatIds.length}\n` +
+          `${chatIds.join(", ")}`
+        );
         return new Response("OK");
       }
 
-      // debugfile 1051 -> cari file di semua folder output
       if (text.startsWith("debugfile ")) {
         const num = text.replace("debugfile ", "").trim().replace(/\D/g, "").padStart(4, "0");
         const folders = await getOutputFolders(env);
@@ -141,7 +140,6 @@ export default {
         return new Response("OK");
       }
 
-      // --- MAIN FLOW ---
       const cdp = text.replace(/\D/g, "");
       if (!cdp) {
         await sendMessage(env, chatId, "Kirim nomor CDP. Contoh: 1064");
@@ -178,12 +176,12 @@ export default {
 
       let msg = `🔍 Hasil: ${cdpKey}\n\n`;
 
-      // Jika ada beberapa email CDP yang sama, tampilkan sebagai beberapa pengajuan.
       if (emailMatches.length <= 1) {
         const emailData = emailMatches[0] || null;
         msg += formatSingleResult(cdp4, emailData, excelData, slipMatches);
       } else {
         msg += `Ditemukan ${emailMatches.length} pengajuan dengan nomor CDP yang sama.\n\n`;
+
         emailMatches.forEach((emailData, idx) => {
           const processMatch = matchProcessRecord(emailData, excelData?.records || []);
           msg += `#${idx + 1} PENGAJUAN\n`;
@@ -202,7 +200,6 @@ export default {
       msg += `\n📊 Status\n`;
       msg += `${bar} ${progress}/100 ${statusText}`;
 
-      // Tombol slip.
       if (hasSlip) {
         const buttons = slipMatches.slice(0, 8).map((s, i) => {
           const slipUrl = `${url.origin}/slip/${cdp4}?folder=${encodeURIComponent(s.folder)}&file=${encodeURIComponent(s.name)}`;
@@ -273,10 +270,9 @@ function formatProcessBlock(processRecord, excelData) {
       `Tgl     : ${rec.tanggal_proses || excelData.tanggal_proses || "-"}\n`;
   }
 
-  // Jika CDP ada di Excel, tapi records lebih dari satu dan belum bisa dipasangkan dengan email tertentu.
   if (excelData.records?.length > 1) {
-    let totalAll = excelData.records.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
-    let penerimaAll = excelData.records.reduce((sum, r) => sum + (Number(r.penerima || r.rows) || 0), 0);
+    const totalAll = excelData.records.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
+    const penerimaAll = excelData.records.reduce((sum, r) => sum + (Number(r.penerima || r.rows) || 0), 0);
     return `\n⚙️ PROSES\n` +
       `Total   : ${formatRupiah(totalAll)}\n` +
       `Penerima: ${penerimaAll} orang\n` +
@@ -290,13 +286,11 @@ function formatProcessBlock(processRecord, excelData) {
 function matchProcessRecord(emailData, records) {
   if (!emailData || !records.length) return null;
 
-  // Prioritas 1: nominal email sama dengan total proses Excel.
   if (emailData.nominal_int) {
     const exact = records.find(r => Number(r.total) === Number(emailData.nominal_int));
     if (exact) return exact;
   }
 
-  // Prioritas 2: subject email mirip dengan KET Excel.
   const subj = normalizeText(emailData.subject || "");
   let best = null;
   let bestScore = 0;
@@ -313,8 +307,6 @@ function matchProcessRecord(emailData, records) {
   }
 
   if (bestScore >= 2) return best;
-
-  // Prioritas 3: kalau cuma satu record, pakai itu.
   if (records.length === 1) return records[0];
 
   return null;
@@ -360,7 +352,6 @@ function parseRupiahNumber(valueText) {
   if (!valueText) return null;
   let s = String(valueText).replace(/[^\d,\.]/g, "");
 
-  // Format Indonesia umum: 1.465.000 atau 4.410.000,00
   if (s.includes(".") && s.includes(",")) {
     s = s.replace(/\./g, "").replace(",", ".");
   } else if (s.includes(".")) {
@@ -378,7 +369,6 @@ function formatRupiah(n) {
   if (!num) return "Rp 0";
   return "Rp " + num.toLocaleString("id-ID");
 }
-
 
 async function getAllowedUsers(env) {
   try {
@@ -419,7 +409,7 @@ async function saveChatId(env, username, chatId) {
       existing = JSON.parse(content);
     }
 
-    if (existing[key] === chatId) {
+    if (String(existing[key]) === String(chatId)) {
       return;
     }
 
@@ -464,6 +454,7 @@ async function getEmailDataList(env, cdp4) {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${EMAIL_CACHE_PATH}`;
     const res = await githubFetch(env, url);
     if (!res.ok) return [];
+
     const meta = await res.json();
     const content = atob(meta.content.replace(/\n/g, ""));
     const emails = JSON.parse(content);
@@ -496,12 +487,10 @@ async function getExcelData(env, cdp4) {
     const content = atob(meta.content.replace(/\n/g, ""));
     const cache = JSON.parse(content);
 
-    // Format lama.
     const cdpList = Array.isArray(cache) ? cache : (cache.cdp_list || []);
     const tanggalMap = Array.isArray(cache) ? {} : (cache.tanggal_proses || {});
     const foundOld = cdpList.includes(cdp4);
 
-    // Format baru.
     const rawRecords = cache.cdp_data?.[cdp4] || [];
     const records = Array.isArray(rawRecords) ? rawRecords : [rawRecords];
 
@@ -519,11 +508,9 @@ async function getExcelData(env, cdp4) {
 }
 
 async function getSlipFiles(env, cdp4) {
-  // Prioritas: output-index.json jika tersedia.
   const indexed = await getSlipFilesFromIndex(env, cdp4);
   if (indexed.length) return indexed;
 
-  // Fallback: cari langsung di semua folder output.
   const folders = await getOutputFolders(env);
   if (!folders.length) return [];
 
@@ -554,7 +541,6 @@ async function getSlipFile(env, cdp4, opts = {}) {
   const folder = opts.folder || null;
   const file = opts.file || null;
 
-  // Jika folder dan file dikirim dari tombol, ambil langsung.
   if (folder) {
     const fileName = file || `CDP ${cdp4}.pdf`;
     const encoded = encodeURIComponent(fileName).replace(/%2F/g, "/");
@@ -613,7 +599,7 @@ async function getOutputFolders(env) {
 async function handleNotify(request, env) {
   const secret = request.headers.get("X-Notify-Secret") || "";
   if (env.NOTIFY_SECRET && secret !== env.NOTIFY_SECRET) {
-    return new Response("Unauthorized", { status: 401 });
+    return new Response("Unauthorized", { status: 403 });
   }
 
   let payload = {};
@@ -624,13 +610,10 @@ async function handleNotify(request, env) {
   }
 
   const text = payload.text || "Notifikasi CDP Bot";
-
-  // Prioritas utama: baca penerima dari data/chat-ids.json
-  // Fallback: env.NOTIFY_CHAT_IDS / env.OWNER_CHAT_ID jika diperlukan.
   const chatIds = await getNotifyChatIds(env);
 
   if (!chatIds.length) {
-    console.log("Tidak ada chat_id untuk notifikasi.");
+    console.log("No chat id configured");
     return new Response("No chat id configured", { status: 200 });
   }
 
@@ -652,21 +635,19 @@ async function handleNotify(request, env) {
     }
   }
 
-  return new Response(`OK sent=${sent} failed=${failed}`);
+  return new Response(`OK sent=${sent} failed=${failed}`, { status: 200 });
 }
 
 async function getNotifyChatIds(env) {
   const ids = [];
 
-  // 1. Ambil otomatis dari data/chat-ids.json
   try {
     const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${CHAT_IDS_PATH}`;
     const res = await githubFetch(env, url);
 
     if (res.ok) {
       const meta = await res.json();
-      const content = atob(meta.content.replace(/
-/g, ""));
+      const content = atob(meta.content.replace(/\n/g, ""));
       const chatMap = JSON.parse(content);
 
       if (chatMap && typeof chatMap === "object") {
@@ -675,13 +656,12 @@ async function getNotifyChatIds(env) {
         }
       }
     } else {
-      console.log("chat-ids.json belum tersedia atau gagal dibaca:", res.status);
+      console.log("chat-ids.json gagal dibaca:", res.status, await res.text());
     }
   } catch (err) {
     console.log("Gagal baca chat-ids.json:", err.message);
   }
 
-  // 2. Fallback manual dari Cloudflare secret jika suatu saat dibutuhkan.
   if (env.NOTIFY_CHAT_IDS) {
     ids.push(...String(env.NOTIFY_CHAT_IDS).split(",").map(x => x.trim()).filter(Boolean));
   }
