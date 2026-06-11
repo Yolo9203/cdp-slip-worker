@@ -379,6 +379,28 @@ function formatRupiah(n) {
   return "Rp " + num.toLocaleString("id-ID");
 }
 
+
+async function getAllowedUsers(env) {
+  try {
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${ALLOWED_USERS_PATH}`;
+    const res = await githubFetch(env, url);
+    if (!res.ok) return [];
+
+    const meta = await res.json();
+    const content = atob(meta.content.replace(/\n/g, ""));
+    const users = JSON.parse(content);
+
+    if (!Array.isArray(users)) return [];
+
+    return users
+      .map(u => String(u || "").toLowerCase().replace(/^@/, "").trim())
+      .filter(Boolean);
+  } catch (err) {
+    console.log("Gagal baca allowed-users:", err.message);
+    return [];
+  }
+}
+
 async function saveChatId(env, username, chatId) {
   try {
     const key = String(username || "").toLowerCase().replace(/^@/, "");
@@ -414,7 +436,7 @@ async function saveChatId(env, username, chatId) {
 
     if (sha) body.sha = sha;
 
-    await fetch(url, {
+    const putRes = await fetch(url, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
@@ -424,6 +446,13 @@ async function saveChatId(env, username, chatId) {
       },
       body: JSON.stringify(body),
     });
+
+    if (!putRes.ok) {
+      const errText = await putRes.text();
+      console.log("Gagal PUT chat_id:", putRes.status, errText);
+    } else {
+      console.log("Berhasil simpan chat_id:", key, chatId);
+    }
 
   } catch (err) {
     console.log("Gagal simpan chat_id:", err.message);
