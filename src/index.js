@@ -624,27 +624,72 @@ async function handleNotify(request, env) {
   }
 
   const text = payload.text || "Notifikasi CDP Bot";
-  const chatIds = getNotifyChatIds(env);
+
+  // Prioritas utama: baca penerima dari data/chat-ids.json
+  // Fallback: env.NOTIFY_CHAT_IDS / env.OWNER_CHAT_ID jika diperlukan.
+  const chatIds = await getNotifyChatIds(env);
 
   if (!chatIds.length) {
+    console.log("Tidak ada chat_id untuk notifikasi.");
     return new Response("No chat id configured", { status: 200 });
   }
 
+  let sent = 0;
+  let failed = 0;
+
   for (const chatId of chatIds) {
-    await sendMessage(env, chatId, text);
+    try {
+      const res = await sendMessage(env, chatId, text);
+      if (res.ok) {
+        sent++;
+      } else {
+        failed++;
+        console.log("Gagal kirim notifikasi:", chatId, res.status, await res.text());
+      }
+    } catch (err) {
+      failed++;
+      console.log("Error kirim notifikasi:", chatId, err.message);
+    }
   }
 
-  return new Response("OK");
+  return new Response(`OK sent=${sent} failed=${failed}`);
 }
 
-function getNotifyChatIds(env) {
+async function getNotifyChatIds(env) {
   const ids = [];
+
+  // 1. Ambil otomatis dari data/chat-ids.json
+  try {
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${CHAT_IDS_PATH}`;
+    const res = await githubFetch(env, url);
+
+    if (res.ok) {
+      const meta = await res.json();
+      const content = atob(meta.content.replace(/
+/g, ""));
+      const chatMap = JSON.parse(content);
+
+      if (chatMap && typeof chatMap === "object") {
+        for (const value of Object.values(chatMap)) {
+          if (value) ids.push(String(value).trim());
+        }
+      }
+    } else {
+      console.log("chat-ids.json belum tersedia atau gagal dibaca:", res.status);
+    }
+  } catch (err) {
+    console.log("Gagal baca chat-ids.json:", err.message);
+  }
+
+  // 2. Fallback manual dari Cloudflare secret jika suatu saat dibutuhkan.
   if (env.NOTIFY_CHAT_IDS) {
     ids.push(...String(env.NOTIFY_CHAT_IDS).split(",").map(x => x.trim()).filter(Boolean));
   }
+
   if (env.OWNER_CHAT_ID) {
     ids.push(String(env.OWNER_CHAT_ID).trim());
   }
+
   return unique(ids);
 }
 
