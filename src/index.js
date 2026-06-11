@@ -4,6 +4,7 @@ const REPO = "Repository-name-BRI-SLIP-GROUPER";
 const EMAIL_CACHE_PATH = "data/email-cache.json";
 const EXCEL_CACHE_PATH = "data/excel-cache.json";
 const ALLOWED_USERS_PATH = "data/allowed-users.json";
+const CHAT_IDS_PATH = "data/chat-ids.json";
 const OUTPUT_INDEX_PATH = "data/output-index.json";
 
 /**
@@ -81,6 +82,8 @@ export default {
         );
         return new Response("OK");
       }
+      
+      await saveChatId(env, username, chatId);
 
       // --- /start ---
       if (text === "/start") {
@@ -376,16 +379,54 @@ function formatRupiah(n) {
   return "Rp " + num.toLocaleString("id-ID");
 }
 
-async function getAllowedUsers(env) {
+async function saveChatId(env, username, chatId) {
   try {
-    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${ALLOWED_USERS_PATH}`;
-    const res = await githubFetch(env, url);
-    if (!res.ok) return [];
-    const meta = await res.json();
-    const content = atob(meta.content.replace(/\n/g, ""));
-    return JSON.parse(content).map(u => String(u).toLowerCase().replace(/^@/, ""));
-  } catch {
-    return [];
+    const key = String(username || "").toLowerCase().replace(/^@/, "");
+    if (!key || !chatId) return;
+
+    const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${CHAT_IDS_PATH}`;
+
+    let existing = {};
+    let sha = null;
+
+    const getRes = await githubFetch(env, url);
+    if (getRes.ok) {
+      const meta = await getRes.json();
+      sha = meta.sha;
+      const content = atob(meta.content.replace(/\n/g, ""));
+      existing = JSON.parse(content);
+    }
+
+    if (existing[key] === chatId) {
+      return;
+    }
+
+    existing[key] = chatId;
+
+    const newContent = btoa(unescape(encodeURIComponent(
+      JSON.stringify(existing, null, 2)
+    )));
+
+    const body = {
+      message: `chore: register chat id for ${key}`,
+      content: newContent,
+    };
+
+    if (sha) body.sha = sha;
+
+    await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "cdp-slip-worker",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+  } catch (err) {
+    console.log("Gagal simpan chat_id:", err.message);
   }
 }
 
