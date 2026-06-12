@@ -201,7 +201,7 @@ export default {
       msg += `${bar} ${progress}/100 ${statusText}`;
 
       if (hasSlip) {
-        const buttons = slipMatches.slice(0, 8).map((s, i) => {
+        const buttons = slipMatches.slice(0, 25).map((s, i) => {
           const slipUrl = `${url.origin}/slip/${cdp4}?folder=${encodeURIComponent(s.folder)}&file=${encodeURIComponent(s.name)}`;
           const label = slipMatches.length === 1
             ? `📄 Slip Transfer ${cdpKey}`
